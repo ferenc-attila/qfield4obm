@@ -21,7 +21,9 @@
   "author": "Attila Ferenc",
   "license": "GPL-3.0",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "eslint": "^10.1.0",
+    "globals": "^17.4.0",
     "husky": "^9.1.7",
     "jest": "^30.3.0",
     "prettier": "^3.8.1"
