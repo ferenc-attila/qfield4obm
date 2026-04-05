@@ -5,3 +5,4 @@ author=Attila Ferenc
 icon=obm_icon.png
 version=0.1.0
 homepage=https://www.openbiomaps.org/
+qfield_plugin
