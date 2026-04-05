@@ -4,6 +4,16 @@ QField4OBM is a dedicated plugin for the [QField](https://qfield.org/) mobile ma
 
 The plugin enables field researchers to download project layers, query specific records via GraphQL filters, work entirely offline on a mobile device, and later synchronize delta-changes back to the OBM server using Bearer token authentication.
 
+## Install in QField
+
+Minimum QField version is 4.1.3. The plugin is still EXPERIMENTAL.
+
+Open the Settings dialog in QField, push the 3 dot button next to "Manage plugins". Push the "Install plugin from URL" button and enter the following link:
+`https://github.com/ferenc-attila/qfield4obm/releases/download/{latest-version}/QField4OBM-{latest-version}.zip`
+Change {latest-version} to the latest version of the plugin, for example v0.1.0.
+
+You can find the latest version in the [releases](https://github.com/ferenc-attila/qfield4obm/releases) page.
+
 ## Architecture & Technology Stack
 
 Because QField operates on mobile platforms (Android/iOS) and Windows/Linux natively via Qt, it **does not support Python (PyQGIS)**. Consequently, this plugin is developed strictly using **QML (Qt Modeling Language)** and **JavaScript (Qt V4 JS engine)**.
@@ -64,4 +74,4 @@ To deploy the plugin locally into QField:
 
 ## License
 
-(Include License details here)
+GNU GPL 3.0
