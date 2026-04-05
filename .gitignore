@@ -1,0 +1,20 @@
+# AI AGent related files
+.agents/
+.claude/
+context/
+resources/
+*.code-workspace
+
+# IDE related files
+.vscode/
+
+# Node
+node_modules/
+
+# Local dev
+## Test QGIS project
+test_project/
+
+## Local build artifacts
+QField4OBM.zip
+QField4OBM-*.zip

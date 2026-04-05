@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Qt tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qtdeclarative5-dev-tools \
+            qml-module-qttest \
+            xvfb
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run JS tests
+        run: npm run test:js
+
+      - name: Run QML tests
+        run: xvfb-run --auto-servernum npm run test:qml
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Validate metadata.txt version matches tag
+        run: |
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          META_VERSION=$(grep -m1 '^version=' metadata.txt | cut -d'=' -f2 | tr -d '[:space:]')
+          if [ "$TAG_VERSION" != "$META_VERSION" ]; then
+            echo "ERROR: Tag version (v$TAG_VERSION) does not match metadata.txt version ($META_VERSION)."
+            echo "Update metadata.txt before tagging."
+            exit 1
+          fi
+
+      - name: Build release ZIP
+        id: build
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ZIP_NAME="QField4OBM-${VERSION}.zip"
+          zip -r "$ZIP_NAME" \
+            main.qml \
+            scripts \
+            components \
+            metadata.txt \
+            *.png \
+            *.svg
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build.outputs.ZIP_NAME }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Qt tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qtdeclarative5-dev-tools \
+            qml-module-qttest \
+            xvfb
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run JS tests
+        run: npm run test:js
+
+      - name: Run QML tests
+        run: xvfb-run --auto-servernum npm run test:qml

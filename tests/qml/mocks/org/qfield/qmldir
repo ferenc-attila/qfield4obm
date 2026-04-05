@@ -1,0 +1,5 @@
+module org.qfield
+Item 1.0 DummyItem.qml
+QfToolButtonDrawer 1.0 QfToolButtonDrawer.qml
+QfToolButton 1.0 QfToolButton.qml
+CoordinateTransformer 1.0 CoordinateTransformer.qml

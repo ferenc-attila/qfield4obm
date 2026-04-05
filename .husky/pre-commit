@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit hook: lint and JS tests must pass before a commit is accepted.
+# QML tests are skipped here because they require a display and Qt tools
+# that may not be available in all dev environments. They run in CI instead.
+
+echo "Running pre-commit checks..."
+
+npm run lint || { echo "Lint failed. Fix errors before committing."; exit 1; }
+npm run test:js || { echo "JS tests failed. Fix them before committing."; exit 1; }
+
+echo "Pre-commit checks passed."
