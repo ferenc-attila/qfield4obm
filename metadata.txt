@@ -1,6 +1,6 @@
 [general]
 name=QField4OBM
-description=This plugin creates connection between QField and an OpenBioMaps Project
+description=This plugin creates connection between QField and an OpenBioMaps Server
 author=Attila Ferenc
 icon=obm_icon.png
 version=0.1.0
