@@ -6,7 +6,6 @@
 import QtQuick 2.12
 import QtQuick.Controls 2.12
 import QtQuick.Layouts 1.12
-import QtQuick.LocalStorage 2.12
 import org.qfield 1.0
 import Theme 1.0
 import "../scripts/ApiClient.js" as ApiClient
