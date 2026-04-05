@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.0). Leave empty to use metadata.txt.'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   release:
@@ -45,17 +56,25 @@ jobs:
       - name: Run QML tests
         run: xvfb-run --auto-servernum npm run test:qml
 
-      - name: Extract version from tag
+      - name: Resolve version
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Validate metadata.txt version matches tag
         run: |
-          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
           META_VERSION=$(grep -m1 '^version=' metadata.txt | cut -d'=' -f2 | tr -d '[:space:]')
-          if [ "$TAG_VERSION" != "$META_VERSION" ]; then
-            echo "ERROR: Tag version (v$TAG_VERSION) does not match metadata.txt version ($META_VERSION)."
-            echo "Update metadata.txt before tagging."
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$META_VERSION"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "META_VERSION=$META_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Validate version matches metadata.txt
+        run: |
+          if [ "${{ steps.version.outputs.VERSION }}" != "${{ steps.version.outputs.META_VERSION }}" ]; then
+            echo "ERROR: Requested version (${{ steps.version.outputs.VERSION }}) does not match metadata.txt (${{ steps.version.outputs.META_VERSION }})."
+            echo "Update metadata.txt before releasing."
             exit 1
           fi
 
@@ -79,4 +98,4 @@ jobs:
           files: ${{ steps.build.outputs.ZIP_NAME }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ inputs.prerelease || contains(github.ref_name, '-') }}
