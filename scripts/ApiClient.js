@@ -253,9 +253,9 @@ function getSpatialData(schema, tableName, primaryGeometry, filters, limit, offs
         variables: variables
     };
 
-    // DEBUG: Log the final payload to help identify ghost filters like is_not_null
-    if (typeof iface !== "undefined") {
-        iface.logMessage("QField4OBM DEBUG Payload: " + JSON.stringify(payload));
+    if (typeof _iface !== "undefined" && _iface) {
+        _iface.logMessage("QField4OBM: getSpatialData -> POST " + endpoint, "QField4OBM", 0);
+        _iface.logMessage("QField4OBM: getSpatialData payload -> " + JSON.stringify(payload), "QField4OBM", 0);
     }
 
     // Sending via POST
@@ -316,8 +316,9 @@ function getObmData(schema, tableName, filters, limit, offset, fieldNames, callb
         variables: variables
     };
 
-    if (typeof iface !== "undefined") {
-        iface.logMessage("QField4OBM DEBUG Attribute Payload: " + JSON.stringify(payload));
+    if (typeof _iface !== "undefined" && _iface) {
+        _iface.logMessage("QField4OBM: getObmData -> POST " + endpoint, "QField4OBM", 0);
+        _iface.logMessage("QField4OBM: getObmData payload -> " + JSON.stringify(payload), "QField4OBM", 0);
     }
 
     _sendAuthenticatedRequest("POST", endpoint, payload, callback);

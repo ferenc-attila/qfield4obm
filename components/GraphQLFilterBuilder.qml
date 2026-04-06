@@ -2,6 +2,7 @@
 // Component for building dynamic GraphQL filter objects.
 // Uses ApiClient.js to fetch available data tables and their column definitions.
 // Generates a JS object matching the ObmDataFilterInput schema.
+// Supports AND/OR/NOT logical operators and nested filter groups.
 
 import QtQuick 2.12
 import QtQuick.Controls 2.12
@@ -14,7 +15,8 @@ Item {
     id: root
     width: 400
     height: 600
-    // Expose the generated filter object (read‑only)
+
+    // Expose the generated filter object (read-only)
     property var filterObject: ({})
     property int targetSrid: 4326
 
@@ -29,18 +31,470 @@ Item {
     ListModel { id: tablesModel }
     ListModel { id: subLayerModel }
     ListModel { id: fieldsModel }
-    ListModel { id: rowsModel }
 
     // Safe Theme color properties (overridden from main.qml)
     property color bgColor: (typeof Theme !== "undefined" && typeof Theme.controlBackgroundColor !== "undefined") ? Theme.controlBackgroundColor : "#ffffff"
     property color fgColor: (typeof Theme !== "undefined" && typeof Theme.mainTextColor !== "undefined") ? Theme.mainTextColor : "#000000"
     property color borderColor: (typeof Theme !== "undefined" && typeof Theme.controlBorderColor !== "undefined") ? Theme.controlBorderColor : "#cccccc"
 
+    // ----- Filter state -----
+    property string rootLogic: "AND"
+    property var createdFilterItems: []  // array of dynamically created QML filter item objects
+
     // ----- Test Hooks -----
     property alias testMainColumn: mainColumn
     property alias testErrorLabel: errorLabel
-    property alias testAddButton: addFilterButton
-    property alias testRowsRepeater: rowsRepeater
+    property alias testAddButton: addConditionButton
+    property alias testFilterItemsColumn: filterItemsColumn
+
+    // ----- Operator definitions -----
+    function getOperators(baseType) {
+        if (baseType === "numeric") {
+            return [
+                { name: "equals",                 label: "= equals" },
+                { name: "not_equals",             label: "≠ not equals" },
+                { name: "greater_than",           label: "> greater than" },
+                { name: "less_than",              label: "< less than" },
+                { name: "greater_than_or_equals", label: "≥ at least" },
+                { name: "less_than_or_equals",    label: "≤ at most" },
+                { name: "in",                     label: "in list" },
+                { name: "not_in",                 label: "not in list" },
+                { name: "is_null",                label: "is null" },
+                { name: "is_not_null",            label: "is not null" }
+            ]
+        } else if (baseType === "boolean") {
+            return [
+                { name: "equals",     label: "equals" },
+                { name: "not_equals", label: "not equals" },
+                { name: "is_null",    label: "is null" },
+                { name: "is_not_null", label: "is not null" }
+            ]
+        } else if (baseType === "date") {
+            return [
+                { name: "equals",                 label: "equals" },
+                { name: "not_equals",             label: "not equals" },
+                { name: "greater_than",           label: "after" },
+                { name: "less_than",              label: "before" },
+                { name: "greater_than_or_equals", label: "on or after" },
+                { name: "less_than_or_equals",    label: "on or before" },
+                { name: "year",                   label: "year equals" },
+                { name: "is_past",                label: "is in past" },
+                { name: "is_future",              label: "is in future" },
+                { name: "is_today",               label: "is today" },
+                { name: "is_null",                label: "is null" },
+                { name: "is_not_null",            label: "is not null" }
+            ]
+        } else {
+            // string (default)
+            return [
+                { name: "equals",        label: "equals" },
+                { name: "not_equals",    label: "not equals" },
+                { name: "iequals",       label: "equals (ignore case)" },
+                { name: "ilike",         label: "contains" },
+                { name: "not_ilike",     label: "not contains" },
+                { name: "istarts_with",  label: "starts with" },
+                { name: "iends_with",    label: "ends with" },
+                { name: "in",            label: "in list" },
+                { name: "not_in",        label: "not in list" },
+                { name: "is_null",       label: "is null" },
+                { name: "is_not_null",   label: "is not null" },
+                { name: "is_empty",      label: "is empty" },
+                { name: "is_not_empty",  label: "is not empty" }
+            ]
+        }
+    }
+
+    function isNoValueOp(opName) {
+        return ["is_null", "is_not_null", "is_empty", "is_not_empty",
+                "is_past", "is_future", "is_today"].indexOf(opName) >= 0
+    }
+
+    function isListOp(opName) {
+        return ["in", "not_in"].indexOf(opName) >= 0
+    }
+
+    function buildValue(op, baseType, rawVal) {
+        if (isNoValueOp(op)) return true
+
+        if (isListOp(op)) {
+            var parts = rawVal.split(",").map(function(v) { return v.trim() }).filter(function(v) { return v !== "" })
+            if (parts.length === 0) return null
+            if (baseType === "numeric") {
+                var nums = parts.map(function(v) { return parseFloat(v) }).filter(function(v) { return !isNaN(v) })
+                return nums.length > 0 ? nums : null
+            }
+            return parts
+        }
+
+        if (baseType === "numeric") {
+            if (op === "year") { var y = parseInt(rawVal); return isNaN(y) ? null : y }
+            var n = parseFloat(rawVal)
+            return isNaN(n) ? null : n
+        }
+        if (baseType === "boolean") {
+            return rawVal === "true" || rawVal === true
+        }
+        if (rawVal === "") return null
+        return rawVal
+    }
+
+    // ----- Filter object builder -----
+    function updateFilter() {
+        var items = []
+        for (var i = 0; i < createdFilterItems.length; i++) {
+            var item = createdFilterItems[i]
+            if (item && typeof item.buildFilter === "function") {
+                var built = item.buildFilter()
+                if (built !== null) items.push(built)
+            }
+        }
+        if (items.length === 0) {
+            filterObject = {}
+        } else {
+            var result = {}
+            result[rootLogic] = items
+            filterObject = result
+        }
+        console.log("GraphQLFilterBuilder: filterObject", JSON.stringify(filterObject))
+    }
+
+    // ----- Dynamic item management -----
+    function addFilterCondition() {
+        var item = conditionRowComp.createObject(filterItemsColumn, {
+            initialFieldIndex: 0
+        })
+        if (item) {
+            item.removeRequested.connect(function() { removeFilterItem(item) })
+            item.filterChanged.connect(updateFilter)
+            var newItems = createdFilterItems.slice()
+            newItems.push(item)
+            createdFilterItems = newItems
+        }
+        updateFilter()
+    }
+
+    function addFilterGroup() {
+        var item = groupRowComp.createObject(filterItemsColumn)
+        if (item) {
+            item.removeRequested.connect(function() { removeFilterItem(item) })
+            item.filterChanged.connect(updateFilter)
+            var newItems = createdFilterItems.slice()
+            newItems.push(item)
+            createdFilterItems = newItems
+        }
+        updateFilter()
+    }
+
+    function removeFilterItem(item) {
+        var newItems = []
+        for (var i = 0; i < createdFilterItems.length; i++) {
+            if (createdFilterItems[i] !== item) newItems.push(createdFilterItems[i])
+        }
+        createdFilterItems = newItems
+        item.destroy()
+        updateFilter()
+    }
+
+    function clearAllFilterItems() {
+        for (var i = 0; i < createdFilterItems.length; i++) {
+            if (createdFilterItems[i]) createdFilterItems[i].destroy()
+        }
+        createdFilterItems = []
+    }
+
+    // ----- Condition Row Component -----
+    // Used at root level and inside groups (isGroupCondition controls visual depth).
+    Component {
+        id: conditionRowComp
+
+        Rectangle {
+            id: condRow
+            width: parent ? parent.width : root.width
+            height: condColumn.implicitHeight + 24
+            radius: 8
+            color: "transparent"
+            border.color: isGroupCondition ? Qt.lighter(root.borderColor, 1.3) : root.borderColor
+            border.width: 1
+
+            signal removeRequested()
+            signal filterChanged()
+
+            property int initialFieldIndex: 0
+            property bool isGroupCondition: false
+
+            // UI state — all written back by child controls
+            property int currentFieldIndex: initialFieldIndex
+            property string currentBaseType: {
+                if (fieldsModel.count > 0 && initialFieldIndex < fieldsModel.count)
+                    return fieldsModel.get(initialFieldIndex).baseType || "string"
+                return "string"
+            }
+            property int currentOpIndex: 0
+            property string currentValue: ""
+            property bool negated: false
+
+            // Computed from state
+            property var currentOps: root.getOperators(currentBaseType)
+            property string currentOperator: currentOpIndex < currentOps.length ? currentOps[currentOpIndex].name : "equals"
+            property bool isNoValue: root.isNoValueOp(currentOperator)
+            property bool isListValue: root.isListOp(currentOperator)
+
+            // Sync currentValue changes back to the text field (e.g. when field changes)
+            onCurrentValueChanged: {
+                if (textValueInput.text !== currentValue) textValueInput.text = currentValue
+            }
+
+            function buildFilter() {
+                if (fieldsModel.count === 0) return null
+                var fieldIdx = currentFieldIndex < fieldsModel.count ? currentFieldIndex : 0
+                var col = fieldsModel.get(fieldIdx).name
+                if (!col || !currentOperator) return null
+                var val = root.buildValue(currentOperator, currentBaseType, currentValue)
+                if (val === null && !isNoValue) return null
+                var cond = {}
+                cond[currentOperator] = val
+                var field = {}
+                field[col] = cond
+                if (negated) return { NOT: field }
+                return field
+            }
+
+            Column {
+                id: condColumn
+                width: parent.width - 24
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: 12
+                spacing: 10
+
+                // Row 1: Field and Operator selectors
+                Row {
+                    width: parent.width
+                    spacing: 8
+
+                    ComboBox {
+                        id: fieldCombo
+                        width: (parent.width - 8) / 2
+                        model: fieldsModel
+                        textRole: "name"
+                        Component.onCompleted: {
+                            currentIndex = condRow.initialFieldIndex < fieldsModel.count ? condRow.initialFieldIndex : 0
+                        }
+                        onCurrentIndexChanged: {
+                            if (currentIndex >= 0 && currentIndex < fieldsModel.count
+                                    && currentIndex !== condRow.currentFieldIndex) {
+                                condRow.currentFieldIndex = currentIndex
+                                condRow.currentBaseType = fieldsModel.get(currentIndex).baseType || "string"
+                                condRow.currentOpIndex = 0
+                                condRow.currentValue = ""
+                                condRow.filterChanged()
+                            }
+                        }
+                    }
+
+                    ComboBox {
+                        id: opCombo
+                        width: (parent.width - 8) / 2
+                        model: condRow.currentOps
+                        textRole: "label"
+                        onModelChanged: currentIndex = 0
+                        onCurrentIndexChanged: {
+                            if (currentIndex >= 0 && currentIndex < condRow.currentOps.length
+                                    && currentIndex !== condRow.currentOpIndex) {
+                                condRow.currentOpIndex = currentIndex
+                                condRow.filterChanged()
+                            }
+                        }
+                    }
+                }
+
+                // Row 2a: Text / number / date value input
+                TextField {
+                    id: textValueInput
+                    visible: !condRow.isNoValue && condRow.currentBaseType !== "boolean"
+                    width: parent.width
+                    height: visible ? implicitHeight : 0
+                    placeholderText: condRow.isListValue ? "val1, val2, val3..." :
+                                     condRow.currentBaseType === "date" ? "YYYY-MM-DD" :
+                                     condRow.currentBaseType === "numeric" ? "Enter number..." : "Enter text..."
+                    inputMethodHints: condRow.currentBaseType === "numeric" ? Qt.ImhFormattedNumbersOnly : Qt.ImhNone
+                    onTextChanged: {
+                        if (text !== condRow.currentValue) {
+                            condRow.currentValue = text
+                            condRow.filterChanged()
+                        }
+                    }
+                }
+
+                // Row 2b: Boolean value input
+                ComboBox {
+                    id: boolValueCombo
+                    visible: !condRow.isNoValue && condRow.currentBaseType === "boolean"
+                    width: parent.width
+                    height: visible ? implicitHeight : 0
+                    model: ["true", "false"]
+                    onVisibleChanged: {
+                        if (visible) {
+                            condRow.currentValue = currentText
+                            condRow.filterChanged()
+                        }
+                    }
+                    onCurrentTextChanged: {
+                        if (visible) {
+                            condRow.currentValue = currentText
+                            condRow.filterChanged()
+                        }
+                    }
+                }
+
+                // Row 3: NOT toggle and Remove button
+                Row {
+                    width: parent.width
+                    spacing: 8
+
+                    CheckBox {
+                        text: "NOT"
+                        checked: condRow.negated
+                        onCheckedChanged: {
+                            condRow.negated = checked
+                            condRow.filterChanged()
+                        }
+                    }
+
+                    Button {
+                        text: "Remove"
+                        height: 48
+                        onClicked: condRow.removeRequested()
+                    }
+                }
+            }
+        }
+    }
+
+    // ----- Filter Group Component -----
+    // A logical group (AND/OR) containing nested condition rows.
+    Component {
+        id: groupRowComp
+
+        Rectangle {
+            id: groupRect
+            width: parent ? parent.width : root.width
+            height: groupColumn.implicitHeight + 24
+            radius: 8
+            color: Qt.rgba(root.borderColor.r, root.borderColor.g, root.borderColor.b, 0.08)
+            border.color: root.borderColor
+            border.width: 2
+
+            signal removeRequested()
+            signal filterChanged()
+
+            property string groupLogic: "OR"
+            property bool negated: false
+            property var groupConditionItems: []
+
+            function buildFilter() {
+                var items = []
+                for (var i = 0; i < groupConditionItems.length; i++) {
+                    var item = groupConditionItems[i]
+                    if (item && typeof item.buildFilter === "function") {
+                        var built = item.buildFilter()
+                        if (built !== null) items.push(built)
+                    }
+                }
+                if (items.length === 0) return null
+                var g = {}
+                g[groupLogic] = items
+                if (negated) return { NOT: g }
+                return g
+            }
+
+            function addGroupCondition() {
+                var item = conditionRowComp.createObject(groupInnerColumn, {
+                    initialFieldIndex: 0,
+                    isGroupCondition: true
+                })
+                if (item) {
+                    item.removeRequested.connect(function() { removeGroupCondition(item) })
+                    item.filterChanged.connect(groupRect.filterChanged)
+                    groupConditionItems.push(item)
+                }
+                groupRect.filterChanged()
+            }
+
+            function removeGroupCondition(item) {
+                var newItems = []
+                for (var i = 0; i < groupConditionItems.length; i++) {
+                    if (groupConditionItems[i] !== item) newItems.push(groupConditionItems[i])
+                }
+                groupConditionItems = newItems
+                item.destroy()
+                groupRect.filterChanged()
+            }
+
+            Component.onCompleted: addGroupCondition()
+
+            Column {
+                id: groupColumn
+                width: parent.width - 24
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: 12
+                spacing: 10
+
+                // Group header
+                Row {
+                    width: parent.width
+                    spacing: 8
+
+                    Label {
+                        text: "Group:"
+                        color: root.fgColor
+                        font.bold: true
+                        verticalAlignment: Text.AlignVCenter
+                        height: 48
+                    }
+
+                    ComboBox {
+                        width: 110
+                        model: ["OR", "AND"]
+                        currentIndex: groupRect.groupLogic === "AND" ? 1 : 0
+                        onCurrentTextChanged: {
+                            groupRect.groupLogic = currentText
+                            groupRect.filterChanged()
+                        }
+                    }
+
+                    CheckBox {
+                        text: "NOT"
+                        checked: groupRect.negated
+                        onCheckedChanged: {
+                            groupRect.negated = checked
+                            groupRect.filterChanged()
+                        }
+                    }
+
+                    Button {
+                        text: "Remove Group"
+                        height: 48
+                        onClicked: groupRect.removeRequested()
+                    }
+                }
+
+                // Nested conditions
+                Column {
+                    id: groupInnerColumn
+                    width: parent.width
+                    spacing: 8
+                }
+
+                Button {
+                    text: "+ Add Condition"
+                    height: 48
+                    width: parent.width / 2
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    onClicked: groupRect.addGroupCondition()
+                }
+            }
+        }
+    }
 
     // ----- UI -----
     ScrollView {
@@ -56,7 +510,6 @@ Item {
             id: mainColumn
             width: scrollView.width
             spacing: 24
-
             objectName: "mainColumn"
 
             // Step 1: Table selection
@@ -70,6 +523,7 @@ Item {
                     font.bold: true
                     font.pixelSize: 16
                 }
+
                 ComboBox {
                     id: tableCombo
                     width: parent.width
@@ -87,34 +541,33 @@ Item {
                                         iface.logMessage("QField4OBM: getTableDetails response -> " + JSON.stringify(response))
                                     }
                                     var fields = response.fields || []
-                                    var obmGeom = null;
-                                    root.targetSrid = 4326; // reset to default
+                                    var obmGeom = null
+                                    root.targetSrid = 4326
                                     for (var i = 0; i < fields.length; ++i) {
-                                        // Handle both string array and object array representations
-                                        var fieldObj = typeof fields[i] === "object" ? fields[i] : null;
-                                        var fieldName = fieldObj ? fieldObj.name : fields[i];
-                                        var fieldType = fieldObj ? (fieldObj.type || "").toLowerCase() : "character varying";
+                                        var fieldObj = typeof fields[i] === "object" ? fields[i] : null
+                                        var fieldName = fieldObj ? fieldObj.name : fields[i]
+                                        var fieldType = fieldObj ? (fieldObj.type || "").toLowerCase() : "character varying"
 
                                         if (fieldObj && fieldName === "obm_geometry") {
-                                            obmGeom = fieldObj;
+                                            obmGeom = fieldObj
                                             if (fieldObj.geometry_column_details && fieldObj.geometry_column_details.SRID) {
-                                                root.targetSrid = fieldObj.geometry_column_details.SRID;
+                                                root.targetSrid = fieldObj.geometry_column_details.SRID
                                             }
                                         }
 
-                                        var baseType = "";
+                                        var baseType = ""
                                         if (fieldType.indexOf("geometry") >= 0 || fieldType.indexOf("geography") >= 0) {
-                                            continue; // Skip geometry fields matching what the user requested
+                                            continue
                                         } else if (fieldType.indexOf("character") >= 0 || fieldType.indexOf("text") >= 0) {
-                                            baseType = "string";
+                                            baseType = "string"
                                         } else if (fieldType.indexOf("numeric") >= 0 || fieldType.indexOf("integer") >= 0 || fieldType.indexOf("double") >= 0 || fieldType.indexOf("real") >= 0 || fieldType.indexOf("int") >= 0) {
-                                            baseType = "numeric";
+                                            baseType = "numeric"
                                         } else if (fieldType.indexOf("date") >= 0 || fieldType.indexOf("time") >= 0) {
-                                            baseType = "date";
+                                            baseType = "date"
                                         } else if (fieldType.indexOf("bool") >= 0) {
-                                            baseType = "boolean";
+                                            baseType = "boolean"
                                         } else {
-                                            baseType = "string"; // fallback
+                                            baseType = "string"
                                         }
 
                                         if (fieldName) {
@@ -123,29 +576,27 @@ Item {
                                     }
 
                                     if (!obmGeom) {
-                                        subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" });
+                                        subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" })
                                     } else {
-                                        var details = obmGeom.geometry_column_details;
+                                        var details = obmGeom.geometry_column_details
                                         if (details) {
-                                            var pts = (details["Point"] || 0) + (details["MultiPoint"] || 0);
-                                            var lines = (details["LineString"] || 0) + (details["MultiLineString"] || 0);
-                                            var polys = (details["Polygon"] || 0) + (details["MultiPolygon"] || 0);
-                                            
-                                            // Append only if counts are > 0
-                                            if (pts > 0) subLayerModel.append({ name: table + " (Points)", icon: "mIconPoint" });
-                                            if (lines > 0) subLayerModel.append({ name: table + " (Lines)", icon: "mIconLine" });
-                                            if (polys > 0) subLayerModel.append({ name: table + " (Polygons)", icon: "mIconPolygon" });
-                                            
+                                            var pts = (details["Point"] || 0) + (details["MultiPoint"] || 0)
+                                            var lines = (details["LineString"] || 0) + (details["MultiLineString"] || 0)
+                                            var polys = (details["Polygon"] || 0) + (details["MultiPolygon"] || 0)
+                                            if (pts > 0) subLayerModel.append({ name: table + " (Points)", icon: "mIconPoint" })
+                                            if (lines > 0) subLayerModel.append({ name: table + " (Lines)", icon: "mIconLine" })
+                                            if (polys > 0) subLayerModel.append({ name: table + " (Polygons)", icon: "mIconPolygon" })
                                             if (pts === 0 && lines === 0 && polys === 0) {
-                                                subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" });
+                                                subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" })
                                             }
                                         } else {
-                                            subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" });
+                                            subLayerModel.append({ name: table + " (Attributes)", icon: "mIconTable" })
                                         }
                                     }
 
-                                    rowsModel.clear()
-                                    rowsModel.append({ column: "", operator: "", value: "" })
+                                    // Reset filters for the new table
+                                    root.clearAllFilterItems()
+                                    root.addFilterCondition()
                                 } else {
                                     errorLabel.text = "Failed to load table details: " + response
                                     errorLabel.visible = true
@@ -162,6 +613,7 @@ Item {
                     font.pixelSize: 16
                     visible: subLayerModel.count > 0
                 }
+
                 ComboBox {
                     id: subLayerCombo
                     width: parent.width
@@ -222,184 +674,60 @@ Item {
                 font.italic: true
             }
 
-            // Step 2: Dynamic filter rows
+            // Step 2: Filter builder
             Column {
                 width: parent.width
-                spacing: 16
+                spacing: 12
 
-                Repeater {
-                    id: rowsRepeater
-                    model: rowsModel
+                // Filter section header with root logic and add buttons
+                Row {
+                    width: parent.width
+                    spacing: 8
 
-                    Rectangle {
-                        id: filterRowRect
-                        objectName: "filterRow"
-                        width: parent.width
-                        height: rowLayout.implicitHeight + 24
-                        radius: 8
-                        color: "transparent"
-                        border.color: root.borderColor
-                        border.width: 1
+                    Label {
+                        text: "Filters:"
+                        color: root.fgColor
+                        font.bold: true
+                        font.pixelSize: 16
+                        verticalAlignment: Text.AlignVCenter
+                        height: 48
+                    }
 
-                        property string currentBaseType: {
-                            if (colCombo.currentIndex >= 0 && fieldsModel.count > colCombo.currentIndex) {
-                                var bt = fieldsModel.get(colCombo.currentIndex).baseType;
-                                return bt ? bt : "string";
-                            }
-                            return "string";
-                        }
-
-                        Column {
-                            id: rowLayout
-                            width: parent.width - 24
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            y: 12
-                            spacing: 12
-
-                            // Row 1: Column and Operator
-                            Row {
-                                width: parent.width
-                                spacing: 12
-                                ComboBox {
-                                    id: colCombo
-                                    width: (parent.width - 12) / 2
-                                    model: fieldsModel
-                                    textRole: "name"
-                                    onCurrentIndexChanged: { 
-                                        if(currentIndex >= 0 && currentIndex < fieldsModel.count && index >= 0) { 
-                                            var f = fieldsModel.get(currentIndex);
-                                            rowsModel.setProperty(index, "column", f.name);
-                                            rowsModel.setProperty(index, "baseType", f.baseType || "string");
-                                            rowsModel.setProperty(index, "value", "");
-                                            root.updateFilter(); 
-                                        } 
-                                    }
-                                }
-                                ComboBox {
-                                    id: opCombo
-                                    width: (parent.width - 12) / 2
-                                    model: [{name:"equals"},{name:"ilike"},{name:"greater_than"},{name:"less_than"},{name:"is_null"}]
-                                    textRole: "name"
-                                    onCurrentIndexChanged: { 
-                                        if(currentIndex >= 0 && currentIndex < model.length && index >= 0) { 
-                                            rowsModel.setProperty(index, "operator", opCombo.model[currentIndex].name); 
-                                            root.updateFilter(); 
-                                        } 
-                                    }
-                                }
-                            }
-
-                            // Row 2: Value and Remove Button
-                            Row {
-                                width: parent.width
-                                spacing: 12
-                                
-                                TextField {
-                                    visible: opCombo.currentText !== "is_null" && filterRowRect.currentBaseType === "string"
-                                    width: visible ? (parent.width - 12) / 2 : 0
-                                    placeholderText: "Enter text..."
-                                    text: filterRowRect.currentBaseType === "string" && model.value !== undefined ? model.value : ""
-                                    onTextChanged: { if(visible && text !== model.value) { rowsModel.setProperty(index, "value", text); root.updateFilter(); } }
-                                }
-                                TextField {
-                                    visible: opCombo.currentText !== "is_null" && filterRowRect.currentBaseType === "numeric"
-                                    width: visible ? (parent.width - 12) / 2 : 0
-                                    placeholderText: "Enter number..."
-                                    validator: DoubleValidator {}
-                                    text: filterRowRect.currentBaseType === "numeric" && model.value !== undefined ? model.value : ""
-                                    onTextChanged: { 
-                                        if(visible && text !== String(model.value)) { 
-                                            rowsModel.setProperty(index, "value", text); 
-                                            root.updateFilter(); 
-                                        } 
-                                    }
-                                }
-                                TextField {
-                                    visible: opCombo.currentText !== "is_null" && filterRowRect.currentBaseType === "date"
-                                    width: visible ? (parent.width - 12) / 2 : 0
-                                    placeholderText: "YYYY-MM-DD"
-                                    text: filterRowRect.currentBaseType === "date" && model.value !== undefined ? model.value : ""
-                                    onTextChanged: { if(visible && text !== model.value) { rowsModel.setProperty(index, "value", text); root.updateFilter(); } }
-                                }
-                                ComboBox {
-                                    visible: opCombo.currentText !== "is_null" && filterRowRect.currentBaseType === "boolean"
-                                    width: visible ? (parent.width - 12) / 2 : 0
-                                    model: ["true", "false"]
-                                    onCurrentTextChanged: { if(visible) { rowsModel.setProperty(index, "value", currentText); root.updateFilter(); } }
-                                    onVisibleChanged: { if(visible) { rowsModel.setProperty(index, "value", currentText); root.updateFilter(); } }
-                                }
-
-                                Button {
-                                    text: "Remove Filter"
-                                    width: opCombo.currentText === "is_null" ? parent.width : (parent.width - 12) / 2
-                                    onClicked: { rowsModel.remove(index); root.updateFilter(); }
-                                }
-                            }
+                    ComboBox {
+                        id: rootLogicCombo
+                        width: 110
+                        model: ["AND", "OR"]
+                        currentIndex: root.rootLogic === "OR" ? 1 : 0
+                        onCurrentTextChanged: {
+                            root.rootLogic = currentText
+                            root.updateFilter()
                         }
                     }
-                }
-            }
 
-            Button {
-                id: addFilterButton
-                objectName: "addFilterButton"
-                text: "Add Filter"
-                font.bold: true
-                width: parent.width / 2
-                anchors.horizontalCenter: parent.horizontalCenter
-                onClicked: {
-                    var initialCol = "";
-                    var initialBT = "string";
-                    if (fieldsModel.count > 0) {
-                        initialCol = fieldsModel.get(0).name;
-                        initialBT = fieldsModel.get(0).baseType || "string";
+                    Button {
+                        id: addConditionButton
+                        objectName: "addFilterButton"
+                        text: "+ Condition"
+                        height: 48
+                        onClicked: root.addFilterCondition()
                     }
-                    var initialOp = "equals";
-                    rowsModel.append({ column: initialCol, baseType: initialBT, operator: initialOp, value: "" });
-                    root.updateFilter();
+
+                    Button {
+                        text: "+ Group"
+                        height: 48
+                        onClicked: root.addFilterGroup()
+                    }
+                }
+
+                // Container for dynamically created filter items
+                Column {
+                    id: filterItemsColumn
+                    objectName: "filterItemsColumn"
+                    width: parent.width
+                    spacing: 12
                 }
             }
         }
-    }
-
-    // ----- Helper: Build filter object -----
-    function updateFilter() {
-        var andArray = []
-        for (var i = 0; i < rowsModel.count; ++i) {
-            var row = rowsModel.get(i)
-            if (!row.column) continue
-            var op = row.operator
-            if (!op) continue
-            var val = row.value
-            
-            // Cast string values to correct types for GraphQL based on column baseType
-            if (op !== "is_null") {
-                var ctype = row.baseType;
-                // Skip empty values for non-is_null operators to avoid server-side parse errors (e.g. empty date string)
-                if (val === "" && ctype !== "boolean") continue;
-
-                if (ctype === "numeric") {
-                    val = parseFloat(val);
-                    if (isNaN(val)) continue; // avoid invalid type submissions
-                } else if (ctype === "boolean") {
-                    val = (val === "true" || val === true || val === "");
-                }
-            } else {
-                val = true; // For is_null, GraphQL object simply needs `true`
-            }
-
-            var condition = {}
-            condition[op] = val
-            var fieldObj = {}
-            fieldObj[row.column] = condition
-            andArray.push(fieldObj)
-        }
-        if (andArray.length > 0) {
-            filterObject = { AND: andArray }
-        } else {
-            filterObject = {}
-        }
-        console.log("GraphQLFilterBuilder: filterObject", JSON.stringify(filterObject))
     }
 
     // ----- Helper: Load tables externally -----
@@ -413,7 +741,6 @@ Item {
                 tablesModel.append({ name: tableName, schema: tableSchema })
             }
         }
-        // Select first table if available
         if (tablesModel.count > 0) {
             tableCombo.currentIndex = 0
         }
