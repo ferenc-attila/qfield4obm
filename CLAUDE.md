@@ -31,7 +31,7 @@
 
 | File | Content |
 |---|---|
-| `resources/OBM-Project-API.md` | OBM REST API |
-| `resources/GraphQLUserGuide.md` | GraphQL schema & examples |
+| `context/resources/OBM-Project-API.md` | OBM REST API |
+| `context/resources/GraphQLUserGuide.md` | GraphQL schema & examples |
 | `context/Theme Properties in QField.md` | Theme properties we use to make the plugin look like QField |
-| `context/qfield-v4.1.3/` | QField source code for reference |
+| `context/qfield-v4.1.6/` | QField source code for reference |
