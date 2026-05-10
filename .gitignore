@@ -2,7 +2,6 @@
 .agents/
 .claude/
 context/
-resources/
 *.code-workspace
 
 # IDE related files

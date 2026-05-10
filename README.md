@@ -8,11 +8,17 @@ The plugin enables field researchers to download project layers, query specific 
 
 Minimum QField version is 4.1.3. The plugin is still EXPERIMENTAL.
 
-Open the Settings dialog in QField, push the 3 dot button next to "Manage plugins". Push the "Install plugin from URL" button and enter the following link:
-`https://github.com/ferenc-attila/qfield4obm/releases/download/{latest-version}/QField4OBM-{latest-version}.zip`
-Change {latest-version} to the latest version of the plugin, for example v0.1.0.
+You can find the releases in [this GitHub repository](https://github.com/ferenc-attila/qfield4obm) under the ["Releases"](https://github.com/ferenc-attila/qfield4obm/releases) section.
 
-You can find the latest version in the [releases](https://github.com/ferenc-attila/qfield4obm/releases) page.
+Every release has a zip file. Copy the link of the zip you want to install (the latest version is recommended).
+
+`https://github.com/ferenc-attila/qfield4obm/releases/download/{version}/QField4OBM-{version}.zip`
+
+The {version} is the version number of the plugin, for example v0.1.0.
+
+Open the Settings dialog in QField, push the 3 dot button next to "Manage plugins". Push the "Install plugin from URL" button and enter the link you copied.
+
+![Install Plugin](./resources/images/install_plugin.gif)
 
 ## Architecture & Technology Stack
 

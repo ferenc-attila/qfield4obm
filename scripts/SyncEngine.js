@@ -222,12 +222,49 @@ function _syncData(maxBboxArea, userFilterObject, schema, targetTable, targetSri
             }
         } catch (e) {
             if (iface) iface.logMessage("SyncEngine: Could not precisely calculate area using QgsDistanceArea: " + e.toString(), "QField4OBM", 1);
-            areaSqKm = (w + dx * 2) * (h + dy * 2);
+        }
+        // If QgsDistanceArea / QgsRectangle / QgsGeometry were unavailable or threw,
+        // areaSqKm is still 0. Estimate from coordinates so the bbox limit is still enforced.
+        if (areaSqKm <= 0) {
+            var fbSridNum = parseInt(fallbackSrid);
+            if (fbSridNum === 4326) {
+                // Geographic CRS: approximate km² using central-latitude cosine correction
+                var centerLat = (ymin + ymax) / 2;
+                var cosLat = Math.cos(centerLat * Math.PI / 180);
+                areaSqKm = Math.abs((xmax - xmin) * 111.32 * cosLat) * Math.abs((ymax - ymin) * 111.32);
+            } else {
+                // Projected CRS: assume units are metres
+                areaSqKm = Math.abs((xmax - xmin) * (ymax - ymin)) / 1000000.0;
+            }
+            if (iface) iface.logMessage("SyncEngine: Area estimated from coordinates (" + areaSqKm.toFixed(2) + " km², SRID " + fallbackSrid + ")", "QField4OBM", 0);
         }
 
+        var bboxClippedWarning = null;
         if (maxBboxArea > 0 && areaSqKm > maxBboxArea) {
-            finishCallback(false, "WARNING: Download area (" + areaSqKm.toFixed(2) + " km²) exceeds limit of " + maxBboxArea + " km². Zoom in or adjust settings.");
-            return;
+            // Clip to a centered rectangle with the same aspect ratio, scaled to maxBboxArea.
+            var centerX = (xmin + xmax) / 2;
+            var centerY = (ymin + ymax) / 2;
+            var scaleFactor = Math.sqrt(maxBboxArea / areaSqKm);
+            var halfW = (xmax - xmin) / 2 * scaleFactor;
+            var halfH = (ymax - ymin) / 2 * scaleFactor;
+            xmin = centerX - halfW;
+            xmax = centerX + halfW;
+            ymin = centerY - halfH;
+            ymax = centerY + halfH;
+            bboxClippedWarning = "Note: Canvas is too large (" + areaSqKm.toFixed(2) + " km²). Download was clipped to the center " + maxBboxArea + " km² of the map canvas.";
+            progressCallback(10, "Warning: Canvas too large. Clipping download area to center " + maxBboxArea + " km²...");
+            // Rebuild geojsonStr with the clipped coordinates
+            geojsonStr = JSON.stringify({
+                type: "Polygon",
+                crs: { type: "name", properties: { name: "EPSG:" + fallbackSrid } },
+                coordinates: [[
+                    [xmin, ymin],
+                    [xmax, ymin],
+                    [xmax, ymax],
+                    [xmin, ymax],
+                    [xmin, ymin]
+                ]]
+            });
         }
 
         // 3. CRS Transformation for GraphQL BBOX
@@ -396,7 +433,11 @@ function _syncData(maxBboxArea, userFilterObject, schema, targetTable, targetSri
                 if (offset < totalCount) {
                     fetchNextBatch();
                 } else {
-                    _saveToLocalFile(accumulatedFeatures, targetTable, geomType, styleConfig, startTime, totalBytesDownloaded, finishCallback);
+                    _saveToLocalFile(accumulatedFeatures, targetTable, geomType, styleConfig, startTime, totalBytesDownloaded,
+                        bboxClippedWarning
+                            ? function(success, msg) { finishCallback(success, bboxClippedWarning + "\n\n" + msg); }
+                            : finishCallback
+                    );
                 }
             } catch (e) {
                 finishCallback(false, "Error parsing data: " + e.toString());

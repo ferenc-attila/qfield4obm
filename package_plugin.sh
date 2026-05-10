@@ -24,6 +24,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 ZIP_NAME="${PLUGIN_NAME}-${VERSION}.zip"
+LATEST_ZIP="${PLUGIN_NAME}.zip"
 
 echo "Packaging $PLUGIN_NAME v${VERSION} → $ZIP_NAME"
 
@@ -39,12 +40,21 @@ zip -r "$ZIP_NAME" \
   *.png \
   *.svg
 
+zip -r "$LATEST_ZIP" \
+  main.qml \
+  scripts \
+  components \
+  metadata.txt \
+  *.png \
+  *.svg
+
 # --- Local deployment (skip in CI) ---
 if [ "${CI}" != "true" ]; then
   TARGET_DIR="/home/ferencattila/NextcloudDelHeves/attila/qfieldplugin"
   echo "Copying to $TARGET_DIR..."
   mkdir -p "$TARGET_DIR"
   cp "$ZIP_NAME" "$TARGET_DIR/"
+  cp "$LATEST_ZIP" "$TARGET_DIR/"
 
   # Remove QML cache so QField picks up fresh files
   QML_CACHE="${HOME}/.cache/OPENGIS.ch/QField/qmlcache"
