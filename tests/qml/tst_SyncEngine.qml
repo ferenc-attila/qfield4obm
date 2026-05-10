@@ -363,5 +363,211 @@ Item {
             // Restore for subsequent tests
             SyncEngine.init(mockApiClient, null, null, mockQgisProject);
         }
+
+        /**
+         * Verify that when the map canvas area exceeds maxBboxArea, the download is
+         * NOT aborted but instead clipped to a centered rectangle and the finish
+         * message contains the clipping note.
+         *
+         * QgsDistanceArea is unavailable in qmltestrunner, so area falls back to:
+         *   areaSqKm = (w + dx*2) * (h + dy*2)
+         * With extent 200×200 and 10% padding: 240×240 = 57 600 (map units²).
+         * maxBboxArea = 100 triggers clipping.
+         */
+        function test_bboxClippingCentersAndWarns() {
+            var mockApiSpatial = {
+                getSpatialData: function(schema, table, geomField, filters, limit, offset, callback) {
+                    callback(true, {
+                        data: {
+                            spatialObmDataList: {
+                                total_count: 1,
+                                feature_collection: {
+                                    features: [
+                                        { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: { obm_id: 1 } }
+                                    ]
+                                }
+                            }
+                        }
+                    });
+                },
+                getObmData: function(schema, table, filters, limit, offset, fieldNames, callback) {
+                    callback(true, { data: { obmDataList: { total_count: 0, items: [] } } });
+                }
+            };
+
+            // Large extent: 200×200 map units → fallback area = 240×240 = 57 600 >> 100
+            var mockIfaceLargeCanvas = {
+                logMessage: function() {},
+                mapCanvas: function() {
+                    return {
+                        mapSettings: {
+                            extent: {
+                                xMinimum: -100, xMaximum: 100,
+                                yMinimum: -100, yMaximum: 100,
+                                width: 200, height: 200
+                            },
+                            destinationCrs: {
+                                authid: "EPSG:4326",
+                                ellipsoidAcronym: function() { return "EPSG:7030"; }
+                            }
+                        }
+                    };
+                }
+            };
+
+            var capturedBboxGeojson = null;
+            var mockApiCaptureBbox = {
+                getSpatialData: function(schema, table, geomField, filters, limit, offset, callback) {
+                    // Capture the spatial filter to inspect the clipped bbox
+                    if (filters && filters.AND) {
+                        for (let fi = 0; fi < filters.AND.length; fi++) {
+                            if (filters.AND[fi].obm_geometry && filters.AND[fi].obm_geometry.st_intersects) {
+                                capturedBboxGeojson = JSON.parse(filters.AND[fi].obm_geometry.st_intersects);
+                            }
+                        }
+                    }
+                    callback(true, {
+                        data: {
+                            spatialObmDataList: {
+                                total_count: 1,
+                                feature_collection: {
+                                    features: [
+                                        { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: { obm_id: 1 } }
+                                    ]
+                                }
+                            }
+                        }
+                    });
+                },
+                getObmData: function(schema, table, filters, limit, offset, fieldNames, callback) {
+                    callback(true, { data: { obmDataList: { total_count: 0, items: [] } } });
+                }
+            };
+
+            var mockGpkgProxy = function(params) {
+                return { success: true, message: "Mock save OK" };
+            };
+
+            SyncEngine.init(mockApiCaptureBbox, mockIfaceLargeCanvas, null, mockQgisProject, mockGpkgProxy);
+
+            var progressMessages = [];
+            var syncSuccess = false;
+            var syncMessage = "";
+
+            SyncEngine.syncAll(
+                100, {}, "public", "obs", 4326, "Point", ["obm_id"],
+                defaultStyleConfig,
+                function(percent, message) { progressMessages.push(message); },
+                function(success, message) {
+                    syncSuccess = success;
+                    syncMessage = message;
+                }
+            );
+
+            // Should NOT abort — sync must succeed
+            compare(syncSuccess, true, "Sync should succeed when bbox is clipped, not aborted: " + syncMessage);
+
+            // Finish message must contain the clipping note
+            verify(syncMessage.indexOf("clipped") !== -1,
+                   "Finish message should mention clipping, got: " + syncMessage);
+
+            // Progress messages should contain the warning
+            var hasClipWarning = false;
+            for (let pi = 0; pi < progressMessages.length; pi++) {
+                if (progressMessages[pi].indexOf("Clipping") !== -1) {
+                    hasClipWarning = true;
+                    break;
+                }
+            }
+            verify(hasClipWarning, "Progress callback should report the clipping warning");
+
+            // The clipped bbox must be centered on (0, 0) and smaller than the original
+            verify(capturedBboxGeojson !== null, "Spatial filter should have been set");
+            var coords = capturedBboxGeojson.coordinates[0];
+            var clippedXmin = coords[0][0];
+            var clippedXmax = coords[1][0];
+            var clippedYmin = coords[0][1];
+            var clippedYmax = coords[2][1];
+            var clippedW = clippedXmax - clippedXmin;
+            var clippedH = clippedYmax - clippedYmin;
+            // Center must be at (0, 0) within floating point tolerance
+            verify(Math.abs((clippedXmin + clippedXmax) / 2) < 0.001, "Clipped bbox must be centered on X=0");
+            verify(Math.abs((clippedYmin + clippedYmax) / 2) < 0.001, "Clipped bbox must be centered on Y=0");
+            // Clipped area must be smaller than original (200×200 → 240×240 padded)
+            verify(clippedW < 200 && clippedH < 200,
+                   "Clipped bbox must be smaller than the original canvas extent");
+
+            // Restore for subsequent tests
+            SyncEngine.init(mockApiClient, null, null, mockQgisProject);
+        }
+
+        /**
+         * Verify that the bbox transform proxy is invoked when the canvas CRS differs
+         * from the target SRID, and that the transformed (WGS84) coordinates appear in
+         * the spatial filter — not the raw EPSG:23700 metre values.
+         */
+        function test_bboxCrsTransformProxyIsCalledForNonWgs84Canvas() {
+            var proxyCalled = false;
+            var mockProxy = function(ifc, x1, y1, x2, y2, src, trg) {
+                proxyCalled = true;
+                return { xmin: 17.0, ymin: 47.0, xmax: 17.1, ymax: 47.1 };
+            };
+
+            var mockCanvasEov = {
+                mapSettings: {
+                    extent: {
+                        xMinimum: 763200, xMaximum: 763600,
+                        yMinimum: 268300, yMaximum: 269000,
+                        width: 400, height: 700
+                    },
+                    destinationCrs: { authid: "EPSG:23700" }
+                }
+            };
+            var mockIfaceEov = {
+                logMessage: function() {},
+                mapCanvas: function() { return mockCanvasEov; }
+            };
+
+            var capturedFilters = null;
+            var mockApiCapture = {
+                getSpatialData: function(schema, table, geom, filters, limit, offset, cb) {
+                    capturedFilters = filters;
+                    cb(true, {
+                        data: {
+                            spatialObmDataList: {
+                                total_count: 0,
+                                feature_collection: { features: [] }
+                            }
+                        }
+                    });
+                },
+                getObmData: function(schema, table, filters, limit, offset, fieldNames, cb) {
+                    cb(true, { data: { obmDataList: { total_count: 0, items: [] } } });
+                }
+            };
+
+            SyncEngine.init(mockApiCapture, mockIfaceEov, mockProxy, mockQgisProject);
+            SyncEngine.syncAll(
+                0, {}, "public", "obs", 4326, "Point", ["obm_id"],
+                defaultStyleConfig,
+                function() {},
+                function() {}
+            );
+
+            verify(proxyCalled, "BBox transform proxy must be called when canvas CRS differs from target SRID");
+            verify(capturedFilters !== null, "Spatial filters must be passed to the API");
+
+            var filterStr = JSON.stringify(capturedFilters);
+            verify(filterStr.indexOf("st_intersects") !== -1, "Filter must contain st_intersects");
+            // Raw EPSG:23700 metre coordinates (six digits before decimal) must not appear
+            verify(filterStr.indexOf("763") === -1,
+                   "EPSG:23700 raw metre coordinates must not appear in the sent filter");
+            // Transformed WGS84 longitude (~17°) must appear
+            verify(filterStr.indexOf("17.") !== -1,
+                   "Transformed WGS84 longitude must appear in the sent filter");
+
+            // Restore for subsequent tests
+            SyncEngine.init(mockApiClient, null, null, mockQgisProject);
+        }
     }
 }

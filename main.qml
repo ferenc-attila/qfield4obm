@@ -148,55 +148,24 @@ Item {
     }
 
     function _executeBboxProxy(ifc, xmin, ymin, xmax, ymax, srcSridAuth, trgSridNum) {
-        if (ifc) ifc.logMessage("QField4OBM Debug Proxy executing! Tracing properties...");
-
         try {
-            // Property discovery routine for QML C++ exposed objects
-            var getProps = function(obj) {
-                var props = [];
-                for (var key in obj) {
-                    props.push(key);
-                }
-                return props.join(", ");
-            };
+            var srcCrs = CoordinateReferenceSystemUtils.fromDescription(srcSridAuth);
+            var dstCrs = CoordinateReferenceSystemUtils.fromDescription("EPSG:" + trgSridNum);
 
-            if (ifc) {
-                ifc.logMessage("QField4OBM Debug globalApiTransformer properties: " + getProps(globalApiTransformer));
-                if (typeof CoordinateReferenceSystemUtils !== 'undefined') {
-                    ifc.logMessage("QField4OBM Debug CoordinateReferenceSystemUtils properties: " + getProps(CoordinateReferenceSystemUtils));
-                }
-                if (typeof GeometryUtils !== 'undefined') {
-                    ifc.logMessage("QField4OBM Debug GeometryUtils properties: " + getProps(GeometryUtils));
-                }
-            }
+            // isValid is not exposed to QML; rely on reprojectPoint returning null for bad CRS
+            var swPt = GeometryUtils.reprojectPoint(GeometryUtils.point(xmin, ymin), srcCrs, dstCrs);
+            var nePt = GeometryUtils.reprojectPoint(GeometryUtils.point(xmax, ymax), srcCrs, dstCrs);
 
-            // Fallback for EPSG:3857 to EPSG:4326 ONLY natively without C++ QGIS libraries!
-            if ((srcSridAuth === "EPSG:3857" || srcSridAuth === "3857") && (trgSridNum === 4326 || trgSridNum === "4326")) {
-                if (ifc) ifc.logMessage("QField4OBM Debug Applying mathematical Web Mercator to WGS84 fallback!");
-
-                var earthRadius = 6378137.0;
-
-                var mercatorToLonLat = function(x, y) {
-                    var lon = (x / earthRadius) * (180 / Math.PI);
-                    var lat = (y / earthRadius) * (180 / Math.PI);
-                    lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
-                    return { lon: lon, lat: lat };
-                };
-
-                var minCoord = mercatorToLonLat(xmin, ymin);
-                var maxCoord = mercatorToLonLat(xmax, ymax);
-
-                if (minCoord.lon && minCoord.lat && maxCoord.lon && maxCoord.lat) {
-                    return {
-                        xmin: minCoord.lon,
-                        ymin: minCoord.lat,
-                        xmax: maxCoord.lon,
-                        ymax: maxCoord.lat
-                    };
-                }
+            if (swPt && nePt && typeof swPt.x !== 'undefined' && typeof swPt.y !== 'undefined') {
+                if (ifc) ifc.logMessage(
+                    "QField4OBM: BBox transformed " + srcSridAuth + " → EPSG:" + trgSridNum +
+                    " [" + swPt.x.toFixed(6) + "," + swPt.y.toFixed(6) + "] " +
+                    "[" + nePt.x.toFixed(6) + "," + nePt.y.toFixed(6) + "]",
+                    "QField4OBM", 0);
+                return { xmin: swPt.x, ymin: swPt.y, xmax: nePt.x, ymax: nePt.y };
             }
         } catch (e) {
-            if (ifc) ifc.logMessage("QField4OBM Debug Proxy exception: " + e.toString());
+            if (ifc) ifc.logMessage("QField4OBM: BBox proxy error: " + e.toString(), "QField4OBM", 1);
         }
         return null;
     }
