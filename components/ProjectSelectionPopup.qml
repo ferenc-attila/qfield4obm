@@ -53,14 +53,6 @@ Popup {
         }
 
         Label {
-            text: "Warning: If you switch projects, you might lose the spatial tables synced from the previous project."
-            color: "orange"
-            font.bold: true
-            wrapMode: Text.WordWrap
-            Layout.fillWidth: true
-        }
-
-        Label {
             text: projectsPopup.errorMessage
             color: "red"
             wrapMode: Text.WordWrap
